@@ -173,12 +173,6 @@ func (u *istioUpgradeCmd) switchTraffic(opts *istioUpgradeOptions, step int) err
 func (u *istioUpgradeCmd) deployTargetVersion(opts *istioUpgradeOptions) error {
 	fmt.Fprintf(u.out, "deploy %d replica for target version\n", opts.replicaCount)
 
-	// imageRepo, ok := u.values["image.repository"]
-	// if ok {
-	// 	u.values[fmt.Sprintf("%s.image.repository")] = imageRepo
-	// 	delete(u.values, "image.repository")
-	// }
-
 	// imageTag, ok := u.values["image.repository"]
 	for i := 0; i < len(u.values); i++ {
 		u.values[i] = strings.Replace(u.values[i], "image.repository", fmt.Sprintf("%s.image.repository", opts.targetVersion), -1)
