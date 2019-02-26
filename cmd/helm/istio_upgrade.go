@@ -58,6 +58,9 @@ type istioUpgradeCmd struct {
 	password     string
 	devel        bool
 	description  string
+	deployNapSec int
+	switchNapSec int
+	wrapupNapSec int
 
 	certFile string
 	keyFile  string
@@ -128,6 +131,9 @@ func newIstioUpgradeCmd(client helm.Interface, out io.Writer) *cobra.Command {
 	f.StringVar(&upgrade.caFile, "ca-file", "", "verify certificates of HTTPS-enabled servers using this CA bundle")
 	f.BoolVar(&upgrade.devel, "devel", false, "use development versions, too. Equivalent to version '>0.0.0-0'. If --version is set, this is ignored.")
 	f.StringVar(&upgrade.description, "description", "", "specify the description to use for the upgrade, rather than the default")
+	f.IntVar(&upgrade.deployNapSec, "deploy-nap", 60, "nap seconds after deploy the new release")
+	f.IntVar(&upgrade.switchNapSec, "switch-nap", 60, "nap seconds between switching traffic")
+	f.IntVar(&upgrade.wrapupNapSec, "wrapup-nap", 60, "nap seconds before wrap-up")
 
 	f.MarkDeprecated("disable-hooks", "use --no-hooks instead")
 
@@ -142,7 +148,7 @@ func (u *istioUpgradeCmd) switchTraffic(opts *istioUpgradeOptions, step int) err
 	targetVersionTraffic := 20 * step
 	currentVersionTraffic := 100 - targetVersionTraffic
 
-	fmt.Fprintf(u.out, "switching %d%% traffic to target version\n", targetVersionTraffic)
+	fmt.Fprintf(u.out, "- switching %d%% traffic to target version\n", targetVersionTraffic)
 	vv := append(u.values, fmt.Sprintf("%s.trafficWeight=%d,%s.trafficWeight=%d", opts.currentVersion, currentVersionTraffic, opts.targetVersion, targetVersionTraffic))
 
 	vvv, err := vals(u.valueFiles, vv, u.stringValues, u.fileValues, u.certFile, u.keyFile, u.caFile)
@@ -157,21 +163,23 @@ func (u *istioUpgradeCmd) switchTraffic(opts *istioUpgradeOptions, step int) err
 		helm.ReuseValues(true))
 
 	if err != nil {
-		return fmt.Errorf("UPGRADE FAILED: %v", prettyError(err))
+		return fmt.Errorf("switch traffic failed: %v", prettyError(err))
 	}
 
 	if settings.Debug {
 		printRelease(u.out, resp.Release)
 	}
-	fmt.Fprintf(u.out, "%d%% traffic has been switched to new release\n", targetVersionTraffic)
-	nap(u.out, 60)
+	fmt.Fprintf(u.out, "- %d%% traffic has been switched to new release\n", targetVersionTraffic)
+	nap(u.out, u.switchNapSec)
 
 	return nil
 }
 
 // deployTargetVersion 部署 Target version
 func (u *istioUpgradeCmd) deployTargetVersion(opts *istioUpgradeOptions) error {
-	fmt.Fprintf(u.out, "deploy %d replica for target version\n", opts.replicaCount)
+	fmt.Fprintf(u.out, "Deploy\n")
+	fmt.Fprintf(u.out, "==========\n")
+	fmt.Fprintf(u.out, "- deploy %d replica for target version\n", opts.replicaCount)
 
 	// imageTag, ok := u.values["image.repository"]
 	for i := 0; i < len(u.values); i++ {
@@ -201,19 +209,20 @@ func (u *istioUpgradeCmd) deployTargetVersion(opts *istioUpgradeOptions) error {
 		helm.UpgradeDescription(u.description))
 
 	if err != nil {
-		return fmt.Errorf("UPGRADE FAILED: %v", prettyError(err))
+		return fmt.Errorf("deploy failed: %v", prettyError(err))
 	}
 
 	if settings.Debug {
 		printRelease(u.out, resp.Release)
 	}
-	fmt.Fprintf(u.out, "target version %q deployed\n", u.release)
+	fmt.Fprintf(u.out, "- target version %q deployed\n", u.release)
 
 	return nil
 }
 
 func (u *istioUpgradeCmd) wrapUp(opts *istioUpgradeOptions) error {
-	fmt.Fprintf(u.out, "wrapping up\n")
+	fmt.Fprintf(u.out, "Wrap-up\n")
+	fmt.Fprintf(u.out, "==========")
 
 	vv := append(u.values, fmt.Sprintf("%s.replicaCount=0,currentVersion=%s", opts.currentVersion, opts.targetVersion))
 	vvv, err := vals(u.valueFiles, vv, u.stringValues, u.fileValues, u.certFile, u.keyFile, u.caFile)
@@ -284,23 +293,31 @@ func (u *istioUpgradeCmd) run() error {
 	} else {
 		opts.targetVersion = "vx"
 	}
-	fmt.Fprintf(u.out, "start upgrade, currentVersion: %s, targetVersion: %s\n", opts.currentVersion, opts.targetVersion)
+	fmt.Fprintf(u.out, "INFO\n")
+	fmt.Fprintf(u.out, "==========\n")
+	fmt.Fprintf(u.out, "currentVersion: %s\n", opts.currentVersion)
+	fmt.Fprintf(u.out, "targetVersion: %s\n", opts.targetVersion)
+	fmt.Fprintf(u.out, "\n")
 
 	// Start deploy
 	err = u.deployTargetVersion(&opts)
 	if err != nil {
 		return err
 	}
-	fmt.Println("deployed")
-	nap(u.out, 60)
+	nap(u.out, u.deployNapSec)
+	fmt.Fprintf(u.out, "\n")
 
 	// Start traffic switching
 	maxSteps := 5
+	fmt.Fprintf(u.out, "Switch Traffic\n")
+	fmt.Fprintf(u.out, "==========\n")
 	for step := 1; step <= maxSteps; step++ {
 		if err := u.switchTraffic(&opts, step); err != nil {
 			return err
 		}
 	}
+	nap(u.out, u.wrapupNapSec)
+	fmt.Fprintf(u.out, "\n")
 
 	// Wrapup
 	err = u.wrapUp(&opts)
@@ -319,6 +336,10 @@ func (u *istioUpgradeCmd) run() error {
 }
 
 func nap(out io.Writer, seconds int) {
-	fmt.Fprintf(out, "napping for %ds\n", seconds)
-	time.Sleep(time.Duration(seconds) * time.Second)
+	ticker := time.Tick(time.Second)
+	for i := 0; i <= seconds; i++ {
+		<-ticker
+		fmt.Fprintf(out, "\rnapping for %ds: %ds", seconds, i)
+	}
+	fmt.Fprintf(out, "\n")
 }
