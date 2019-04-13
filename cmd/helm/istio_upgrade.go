@@ -194,6 +194,13 @@ func (u *istioUpgradeCmd) deployTargetVersion(opts *istioUpgradeOptions) error {
 		return err
 	}
 
+	// 输出最终 upgrade values
+	fmt.Fprintf(u.out, "Deploy using values\n")
+	fmt.Fprintf(u.out, "==========\n")
+	for _, v := range u.values {
+		fmt.Fprintf(u.out, fmt.Sprintf("%s\n", v))
+	}
+
 	resp, err := u.client.UpdateRelease(
 		u.release,
 		opts.chartPath,
@@ -306,6 +313,7 @@ func (u *istioUpgradeCmd) run() error {
 	}
 	nap(u.out, u.deployNapSec)
 	fmt.Fprintf(u.out, "\n")
+	// TODO: 检查 Target Version Pods 都存在，再继续
 
 	// Start traffic switching
 	maxSteps := 5
